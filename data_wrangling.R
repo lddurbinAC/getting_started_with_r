@@ -3,9 +3,17 @@
 
 library(dplyr)
 
-tuesdata <- tidytuesdayR::tt_load("2022-02-01")
+# to avoid exceeding API limits on GitHub, we'll save the breed_traits table to
+# an RDS file. Once we've saved to RDS, we can comment out the next two lines
+# as I've done here
 
-breed_traits <- tuesdata$breed_traits
+# tuesdata <- tidytuesdayR::tt_load("2022-02-01")
+# saveRDS(tuesdata$breed_traits, "breed_traits.rds")
+
+# we're now reading the data from the RDS file we created, which is faster and
+# avoid exceeding GitHub API limits as described in the link below:
+# https://docs.github.com/en/graphql/overview/resource-limitations
+breed_traits <- readRDS("breed_traits.rds")
 
 select(breed_traits, "Breed")
 

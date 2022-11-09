@@ -27,4 +27,4 @@ select(breed_traits, 1, 2, 6, 7, 8, 9, 10)
 
 select(breed_traits, 1, 2, 6:10)
 
-select(breed_traits, "Breed", "Affectionate With Family", "Drooling Level":"Openness To Strangers")
+select(breed_traits, "Breed", "Affectionate With Family", "Coat Grooming Frequency":"Openness To Strangers")

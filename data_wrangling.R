@@ -37,3 +37,9 @@ filter(breed_traits, drooling_level == 5 | drooling_level == 4)
 filter(breed_traits, drooling_level != 5)
 filter(breed_traits, !drooling_level %in% c(1,3,5))
 filter(breed_traits, drooling_level %in% c(3,4,5) & coat_length == "Short")
+
+# filter then arrange via the pipe
+breed_traits |> 
+  filter(drooling_level == 5) |> 
+  arrange(breed)
+

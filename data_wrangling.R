@@ -38,8 +38,11 @@ filter(breed_traits, drooling_level != 5)
 filter(breed_traits, !drooling_level %in% c(1,3,5))
 filter(breed_traits, drooling_level %in% c(3,4,5) & coat_length == "Short")
 
+# interestingly, dog breeds at the bottom of the alphabet all have an
+# affectionate_with_family rating of 5
+arrange(breed_traits, desc(breed), drooling_level)
+
 # filter then arrange via the pipe
 breed_traits |> 
   filter(drooling_level == 5) |> 
   arrange(breed)
-

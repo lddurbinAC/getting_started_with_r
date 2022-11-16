@@ -43,6 +43,24 @@ filter(breed_traits, drooling_level %in% c(3,4,5) & coat_length == "Short")
 arrange(breed_traits, desc(breed), drooling_level)
 
 # filter then arrange via the pipe
-breed_traits |> 
+drooly_dogs <- breed_traits |> 
   filter(drooling_level == 5) |> 
   arrange(breed)
+
+noisy_dogs <- breed_traits |> 
+  mutate(bark_energy_level = energy_level * barking_level) |> 
+  select(breed, energy_level, barking_level, bark_energy_level) |> 
+  arrange(desc(bark_energy_level))
+
+trainable_dogs <- breed_traits |> 
+  mutate(trainability_category = case_when(
+    trainability_level <= 2 ~ "Not very trainable",
+    trainability_level == 3 ~ "Somewhat trainable",
+    trainability_level > 3 ~ "Very trainable",
+  )) |> 
+  select(breed, trainability_level, trainability_category) |> 
+  filter(trainability_category == "Very trainable")
+
+smooth_dogs <- breed_traits |> 
+  mutate(smooth_coat = if_else(coat_type == "Smooth", TRUE, FALSE)) |> 
+  select(breed, coat_type, smooth_coat)

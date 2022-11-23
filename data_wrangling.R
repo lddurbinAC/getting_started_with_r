@@ -64,3 +64,25 @@ trainable_dogs <- breed_traits |>
 smooth_dogs <- breed_traits |> 
   mutate(smooth_coat = if_else(coat_type == "Smooth", TRUE, FALSE)) |> 
   select(breed, coat_type, smooth_coat)
+
+# group_by and summarise data
+breed_traits |> 
+  mutate(trainability_category = case_when(
+    trainability_level <= 2 ~ "Not very trainable",
+    trainability_level == 3 ~ "Somewhat trainable",
+    trainability_level > 3 ~ "Very trainable",
+  )) |> 
+  group_by(trainability_category) |> 
+  summarise(
+    avg_energy_lvl = mode(energy_level),
+    count = n()
+    )
+
+# count rows
+breed_traits |> 
+  mutate(trainability_category = case_when(
+    trainability_level <= 2 ~ "Not very trainable",
+    trainability_level == 3 ~ "Somewhat trainable",
+    trainability_level > 3 ~ "Very trainable",
+  )) |> 
+  count(trainability_category)

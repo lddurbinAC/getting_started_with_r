@@ -4,6 +4,7 @@
 
 library(janitor)
 library(dplyr)
+library(ggplot2)
 
 # to avoid exceeding API limits on GitHub, we'll save the breed_traits table to
 # an RDS file. Once we've saved to RDS, we can comment out the next two lines
@@ -65,7 +66,7 @@ smooth_dogs <- breed_traits |>
   mutate(smooth_coat = if_else(coat_type == "Smooth", TRUE, FALSE)) |> 
   select(breed, coat_type, smooth_coat)
 
-# group_by and summarise data
+# group_by and summarise data, with bonus chart
 breed_traits |> 
   mutate(trainability_category = case_when(
     trainability_level <= 2 ~ "Not very trainable",
@@ -74,9 +75,13 @@ breed_traits |>
   )) |> 
   group_by(trainability_category) |> 
   summarise(
-    avg_energy_lvl = mode(energy_level),
+    avg_energy_lvl = mean(energy_level),
     count = n()
-    )
+    ) |> 
+  ggplot() +
+  geom_col(aes(x = trainability_category, y = avg_energy_lvl)) +
+  coord_flip() +
+  theme_minimal()
 
 # count rows
 breed_traits |> 

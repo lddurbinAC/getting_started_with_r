@@ -1,0 +1,532 @@
+---
+title: "Getting Started With R: Final Assignment"
+author: "Lee Durbin"
+format: 
+  html:
+    code-link: true
+    page-layout: full
+    toc: true
+---
+
+## Load the packages, peek at the data
+
+In this tutorial we're going to prepare and analyse social media stats for Auckland Libraries. The tutorial was written using Quarto, and code linking has been enabled so that you can click on the functions in the code chunks below to learn more about them.
+
+Before we begin, let's install and load five packages we'll need for preparing the data: readxl, dplyr, tidyr, janitor, and stringr. We're also installing DT, purely for the sake of presenting the data within this guide.
+
+```{r}
+#| warning: false
+#| message: false
+# install.packages("readxl")
+# install.packages("dplyr")
+# install.packages("tidyr")
+# install.packages("janitor")
+# install.packages("stringr")
+# install.packages("DT")
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(janitor)
+library(stringr)
+library(DT)
+```
+
+Now let's inspect our Excel file. How many sheets does it have?
+
+I'm using the fs package here to grab the Excel file path without having to type out the filename, and passing that to excel_sheets() from the readxl package to return the names of the sheets. You don't have to do this, but it is convenient.
+
+```{r}
+excel_file <- fs::dir_ls(glob = "*.xlsx")
+sheets <- excel_sheets(excel_file)
+
+sheets
+```
+
+So there are three Excel sheets in this file, one sheet per Financial Year. Let's inspect one of those sheets, the first by default when we read the file:
+
+```{r}
+#| message: false
+first_sheet <- read_excel(excel_file)
+
+first_sheet |> 
+  glimpse()
+```
+
+Ok so this definitely isn't tidy data, so there's re-shaping we'll need to do. I can also see numbers in many of the column headers, which are probably dates that Excel has converted to numbers.
+
+Let's take a peek at sheets two and three to confirm they follow a similar pattern:
+
+```{r}
+#| message: false
+second_sheet <- read_excel(excel_file, sheet = 2)
+
+second_sheet |> 
+  glimpse()
+```
+
+Yep, same story with sheet two. What about three?
+
+```{r}
+#| message: false
+third_sheet <- read_excel(excel_file, sheet = 3)
+
+third_sheet |> 
+  glimpse()
+```
+
+Same thing here, albeit with more NAs because we don't have a complete year of data for that one.
+
+In conclusion, I have some data wrangling tasks to perform and those tasks are the same for each of the three sheets. Let's fix up one of the sheets and take it from there.
+
+## Pivot & fix Excel dates
+
+I know I want to re-shape the table from wide to long; having dates in the column headings, even when formatted as numbers, contravenes the tidy data convention. Let's fix that by making use of tidyr's pivot_longer function:
+
+```{r}
+first_sheet_long <- first_sheet |> 
+  pivot_longer(cols = where(is.double), names_to = "date") |> 
+  filter(date != "Total") |> 
+  select(date, metric = ...1, value)
+
+first_sheet_long |> 
+  datatable()
+```
+
+For convenience, I just pivoted across any column with a type of double. This picked up the Totals column too, so I dropped that one immediately as it's not necessary. I also selected only the "cleaned" columns (and re-named the first column along the way), although there's obviously a job to be performed on our date column.
+
+It turns out that converting Excel numbers to dates is pretty easy with janitor: just use the excel_numeric_to_date function, and voila! Of course I need to convert this column back to numeric first, it having been converted to a character type during the pivoting process (the the excel_numeric_to_date function always returns a character vector)...
+
+```{r}
+first_sheet_with_dates <- first_sheet_long |> 
+  mutate(date = excel_numeric_to_date(as.numeric(date))) |> 
+  filter(!is.na(metric))
+
+first_sheet_with_dates |> 
+  datatable()
+```
+
+Magic! This is now a semi-tidy data frame. Note that I dropped any rows where there's an NA in the metric column, as in the original data these were empty rows to separate groups of metrics from each other for aesthetic purposes.
+
+## Cleaning string values
+
+I said it's "semi-tidy" because the metric column is holding two values: the platform *and* the metric name. We should probably separate these two out.
+
+How do we do this? We're going to use str_detect() from the stringr package, which allows us to search for a pattern in a string and pass that to a conditional statement within a mutate. We first convert the values in the metric column to lowercase to simplify matters...
+
+```{r}
+first_sheet_with_platforms <- first_sheet_with_dates |> 
+  mutate(
+    metric = str_to_lower(metric),
+    platform = case_when(
+      str_detect(metric, "facebook") ~ "Facebook",
+      str_detect(metric, "twitter") ~ "Twitter",
+      str_detect(metric, "instagram") ~ "Instagram",
+      str_detect(metric, "youtube views") ~ "YouTube",
+      str_detect(metric, "soundcloud") ~ "Sound Cloud",
+      str_detect(metric, "sound cloud") ~ "Sound Cloud",
+      str_detect(metric, "blog") ~ "Blogs"
+  )) |> 
+  filter(!is.na(platform))
+
+first_sheet_with_platforms |> 
+  datatable()
+```
+
+The eagle-eyed among you may have noticed that I dealt with YouTube in an unusual way here by searching for "youtube views", and that's because one of the metrics is called "Total video views (includes YouTube)", which I don't want to classify as YouTube. In addition, I filtered out any rows where a value for the platform column wasn't supplied during my case_when checks: these are the metrics that are totals of some kind (which is different from the total for the year-to-date, which we removed earlier).
+
+Let's go a step further here and standardise the names of the metrics too. To begin with, let's examine how each of the metric names is recorded:
+
+```{r}
+first_sheet_with_platforms |> 
+  distinct(platform, metric) |> 
+  datatable()
+```
+
+Looking at this, we can see that the simplest way to standardise the metric names is by removing the name of the platform, as well as everything within and after any parentheses.
+
+gsub from base R can help us to deal with the parentheses issues, as it uses a simple regular expression to target the string " (" and everything after it.
+
+To remove the names of the platforms, we can use sub and pass a regular expression that targets the first word and the space after it and replaces it with nothing. We need to make an exception for SoundCloud, which is sometimes spelt "Sound Cloud" and hence will require removing two words:
+
+```{r}
+first_sheet_with_metrics <- first_sheet_with_platforms |> 
+  mutate(
+    metric_cleaned = gsub(" \\(.*", "", metric),
+    metric_name = if_else(
+      grepl("sound cloud", metric, ignore.case = TRUE) == TRUE | grepl("total facebook", metric, ignore.case = TRUE) == TRUE,
+      sub("^\\w+\\s\\w+\\s", "", metric_cleaned),
+      sub("^\\w+\\s", "", metric_cleaned)
+      )
+    ) |> 
+  select(platform, metric_name, date, value)
+
+first_sheet_with_metrics |> 
+  datatable()
+```
+
+## Bringing it all together
+
+Let's bring all of these steps together into one data pipeline, which we'll improve by dropping columns we don't need from the start (including the Totals column, and a column that contains a note for one of the rows). We'll also drop any rows where we can't extract a platform name, as these will be either "Totals" or empty rows used to separate things for aesthetic purposes in the Excel spreadsheet:
+
+```{r}
+#| message: false
+excel_file <- fs::dir_ls(glob = "*.xlsx")
+
+sheet_1_tidy_data <- read_excel(excel_file, range = cell_cols("A:M")) |> 
+  pivot_longer(cols = where(is.double), names_to = "date") |> 
+  mutate(
+    date = excel_numeric_to_date(as.numeric(date)),
+    metric = str_to_lower(...1),
+    platform = case_when(
+      str_detect(metric, "facebook") ~ "Facebook",
+      str_detect(metric, "twitter") ~ "Twitter",
+      str_detect(metric, "instagram") ~ "Instagram",
+      str_detect(metric, "youtube views") ~ "YouTube",
+      str_detect(metric, "soundcloud") ~ "Sound Cloud",
+      str_detect(metric, "sound cloud") ~ "Sound Cloud",
+      str_detect(metric, "blog") ~ "Blogs"
+      ),
+    metric_cleaned = gsub(" \\(.*", "", ...1),
+    metric_name = if_else(
+      grepl("sound cloud", metric_cleaned, ignore.case = TRUE) == TRUE | grepl("total facebook", metric_cleaned, ignore.case = TRUE) == TRUE,
+      sub("^\\w+\\s\\w+\\s", "", metric_cleaned),
+      sub("^\\w+\\s", "", metric_cleaned)
+      )
+    ) |> 
+  select(date, platform, metric_name, value) |> 
+  filter(!is.na(platform))
+
+sheet_1_tidy_data |> 
+  datatable()
+```
+
+We need to apply these same steps on sheets 2 and 3. To do this, we'll create named objects for each sheet and pipe them into our data cleaning script:
+
+```{r}
+#| message: false
+excel_file <- fs::dir_ls(glob = "*.xlsx")
+
+sheet_1 <- read_excel(excel_file, range = cell_cols("A:M"), sheet = 1)
+sheet_2 <- read_excel(excel_file, range = cell_cols("A:M"), sheet = 2)
+sheet_3 <- read_excel(excel_file, range = cell_cols("A:M"), sheet = 3)
+
+sheet_1_tidy_data <- sheet_1 |> 
+  pivot_longer(cols = where(is.double), names_to = "date") |> 
+  mutate(
+    date = excel_numeric_to_date(as.numeric(date)),
+    metric = str_to_lower(...1),
+    platform = case_when(
+      str_detect(metric, "facebook") ~ "Facebook",
+      str_detect(metric, "twitter") ~ "Twitter",
+      str_detect(metric, "instagram") ~ "Instagram",
+      str_detect(metric, "youtube views") ~ "YouTube",
+      str_detect(metric, "soundcloud") ~ "Sound Cloud",
+      str_detect(metric, "sound cloud") ~ "Sound Cloud",
+      str_detect(metric, "blog") ~ "Blogs"
+      ),
+    metric_cleaned = gsub(" \\(.*", "", ...1),
+    metric_name = if_else(
+      grepl("sound cloud", metric_cleaned, ignore.case = TRUE) == TRUE | grepl("total facebook", metric_cleaned, ignore.case = TRUE) == TRUE,
+      sub("^\\w+\\s\\w+\\s", "", metric_cleaned),
+      sub("^\\w+\\s", "", metric_cleaned)
+      )
+    ) |> 
+  select(date, platform, metric_name, value) |> 
+  filter(!is.na(platform))
+
+sheet_2_tidy_data <- sheet_2 |> 
+  pivot_longer(cols = where(is.double), names_to = "date") |> 
+  mutate(
+    date = excel_numeric_to_date(as.numeric(date)),
+    metric = str_to_lower(...1),
+    platform = case_when(
+      str_detect(metric, "facebook") ~ "Facebook",
+      str_detect(metric, "twitter") ~ "Twitter",
+      str_detect(metric, "instagram") ~ "Instagram",
+      str_detect(metric, "youtube views") ~ "YouTube",
+      str_detect(metric, "soundcloud") ~ "Sound Cloud",
+      str_detect(metric, "sound cloud") ~ "Sound Cloud",
+      str_detect(metric, "blog") ~ "Blogs"
+      ),
+    metric_cleaned = gsub(" \\(.*", "", ...1),
+    metric_name = if_else(
+      grepl("sound cloud", metric_cleaned, ignore.case = TRUE) == TRUE | grepl("total facebook", metric_cleaned, ignore.case = TRUE) == TRUE,
+      sub("^\\w+\\s\\w+\\s", "", metric_cleaned),
+      sub("^\\w+\\s", "", metric_cleaned)
+      )
+    ) |> 
+  select(date, platform, metric_name, value) |> 
+  filter(!is.na(platform))
+
+sheet_3_tidy_data <- sheet_3 |> 
+  pivot_longer(cols = where(is.double), names_to = "date") |> 
+  mutate(
+    date = excel_numeric_to_date(as.numeric(date)),
+    metric = str_to_lower(...1),
+    platform = case_when(
+      str_detect(metric, "facebook") ~ "Facebook",
+      str_detect(metric, "twitter") ~ "Twitter",
+      str_detect(metric, "instagram") ~ "Instagram",
+      str_detect(metric, "youtube views") ~ "YouTube",
+      str_detect(metric, "soundcloud") ~ "Sound Cloud",
+      str_detect(metric, "sound cloud") ~ "Sound Cloud",
+      str_detect(metric, "blog") ~ "Blogs"
+      ),
+    metric_cleaned = gsub(" \\(.*", "", ...1),
+    metric_name = if_else(
+      grepl("sound cloud", metric_cleaned, ignore.case = TRUE) == TRUE | grepl("total facebook", metric_cleaned, ignore.case = TRUE) == TRUE,
+      sub("^\\w+\\s\\w+\\s", "", metric_cleaned),
+      sub("^\\w+\\s", "", metric_cleaned)
+      )
+    ) |> 
+  select(date, platform, metric_name, value) |> 
+  filter(!is.na(platform))
+```
+
+Finally, let's bring all three data frames together into one source (assigning an ID to each one as we do so that links each row back to a Financial Year):
+
+```{r}
+data <- list(
+  "FY21" = sheet_1_tidy_data,
+  "FY22" = sheet_2_tidy_data,
+  "FY23" = sheet_3_tidy_data
+    )
+
+libraries_social_media <- bind_rows(
+  data,
+  .id = "source"
+)
+
+libraries_social_media |> 
+  datatable()
+```
+
+## Improve it with iteration
+
+There's nothing wrong with the code we've written above: it will work just fine. But it's quite verbose, and doesn't adhere to the DRY principle of software engineering: Don't Repeat Yourself. How can we change that?
+
+Well, when we look at the data prep code for each sheet we can see that the only thing that changes is the reference to a different sheet. In which case, let's abstract the unchanging code out to our own function:
+
+```{r}
+clean_data <- function(sheet_name) {
+  sheet_name |> 
+  pivot_longer(cols = where(is.double), names_to = "date") |> 
+  mutate(
+    date = excel_numeric_to_date(as.numeric(date)),
+    metric = str_to_lower(...1),
+    platform = case_when(
+      str_detect(metric, "facebook") ~ "Facebook",
+      str_detect(metric, "twitter") ~ "Twitter",
+      str_detect(metric, "instagram") ~ "Instagram",
+      str_detect(metric, "youtube views") ~ "YouTube",
+      str_detect(metric, "soundcloud") ~ "Sound Cloud",
+      str_detect(metric, "sound cloud") ~ "Sound Cloud",
+      str_detect(metric, "blog") ~ "Blogs"
+      ),
+    metric_cleaned = gsub(" \\(.*", "", ...1),
+    metric_name = if_else(
+      grepl("sound cloud", metric_cleaned, ignore.case = TRUE) == TRUE | grepl("total facebook", metric_cleaned, ignore.case = TRUE) == TRUE,
+      sub("^\\w+\\s\\w+\\s", "", metric_cleaned),
+      sub("^\\w+\\s", "", metric_cleaned)
+      )
+    ) |> 
+  select(date, platform, metric_name, value) |> 
+  filter(!is.na(platform))
+}
+```
+
+We can now call this function, like so:
+
+```{r}
+#| message: false
+excel_file <- fs::dir_ls(glob = "*.xlsx")
+
+sheet_1 <- read_excel(excel_file, range = cell_cols("A:M"), sheet = 1)
+sheet_2 <- read_excel(excel_file, range = cell_cols("A:M"), sheet = 2)
+sheet_3 <- read_excel(excel_file, range = cell_cols("A:M"), sheet = 3)
+
+sheet_1_tidy_data <- clean_data(sheet_1)
+sheet_2_tidy_data <- clean_data(sheet_2)
+sheet_3_tidy_data <- clean_data(sheet_3)
+
+data <- list(
+  "FY21" = sheet_1_tidy_data,
+  "FY22" = sheet_2_tidy_data,
+  "FY23" = sheet_3_tidy_data
+    )
+
+libraries_social_media <- bind_rows(
+  data,
+  .id = "year"
+)
+
+libraries_social_media |> 
+  datatable()
+```
+
+This is all well and good, but we're still repeating ourselves! Let's bring in the magic of purrr to loop over each sheet and pass the contents to our newly-created clean_names function...
+
+```{r}
+#| warning: false
+#| message: false
+# install.packages("purrr")
+
+library(purrr)
+
+# declare the data-cleaning function
+clean_data <- function(sheet_name) {
+  sheet_name |> 
+  pivot_longer(cols = where(is.double), names_to = "date") |> 
+  mutate(
+    date = excel_numeric_to_date(as.numeric(date)),
+    metric = str_to_lower(...1),
+    platform = case_when(
+      str_detect(metric, "facebook") ~ "Facebook",
+      str_detect(metric, "twitter") ~ "Twitter",
+      str_detect(metric, "instagram") ~ "Instagram",
+      str_detect(metric, "youtube views") ~ "YouTube",
+      str_detect(metric, "soundcloud") ~ "Sound Cloud",
+      str_detect(metric, "sound cloud") ~ "Sound Cloud",
+      str_detect(metric, "blog") ~ "Blogs"
+      ),
+    metric_cleaned = gsub(" \\(.*", "", ...1),
+    metric_name = if_else(
+      grepl("sound cloud", metric_cleaned, ignore.case = TRUE) == TRUE | grepl("total facebook", metric_cleaned, ignore.case = TRUE) == TRUE,
+      sub("^\\w+\\s\\w+\\s", "", metric_cleaned),
+      sub("^\\w+\\s", "", metric_cleaned)
+      )
+    ) |> 
+  select(date, platform, metric_name, value) |> 
+  filter(!is.na(platform))
+}
+
+# get each of the Excel sheets in a list format
+excel_file <- fs::dir_ls(glob = "*.xlsx")
+data <- map(
+  .x = excel_sheets(excel_file),
+  .f = ~read_excel(path = excel_file, sheet = .x, range = cell_cols("A:M"))
+)
+
+# give each list item a name based on the Financial Year so we can add it as a column
+names(data) <- c("FY21", "FY22", "FY23")
+
+# pass each of the list items through our function
+tidy_data <- map_dfr(
+  .x = data,
+  .f = clean_data,
+  .id = "year"
+)
+
+tidy_data |> 
+  datatable()
+```
+
+And there you have it, a lean script for cleaning the data in each of the sheets from the Excel file. If more sheets are added, and assuming they follow the same basic structure as the other three, this script will work just fine on those too. And there's no repetition here, which means the code is easier to read (and easier to describe: see how simple my comments are above each section of the code?), and easier to maintain.
+
+## What's the most & least popular social media platform?
+
+Now we're ready to answer the question: was Facebook, Twitter, or Instagram the most popular social media platform across this period?
+
+As we've already prepared columns for platform and metric_name, it's fairly simple to filter down to the rows we need:
+
+```{r}
+social_engagement <- tidy_data |> 
+  filter(
+    platform %in% c("Facebook", "Twitter", "Instagram"),
+    str_detect(metric_name, "engagement")
+    )
+
+social_engagement |> 
+  datatable()
+```
+
+So, which was the most popular across this period? Let's find out!
+
+```{r}
+social_engagement |> 
+  group_by(platform) |> 
+  summarise(total_engagement = sum(value, na.rm = TRUE)) |> 
+  arrange(desc(total_engagement))
+```
+
+This three-row tibble sorts the social media platforms in descending order according to the total engagement across the entire period; notice I passed na.rm = TRUE to summarise() to disregard any missing values in the calculation, otherwise it would just return NA.
+
+From this simple table, I can see that on top is Facebook, and on the bottom is Twitter.
+
+## What are the "peak" months for each platform?
+
+While we have these engagement metrics for each social media platform, let's grab the "peak" month for each as well.
+
+To do this, we create a new column that gives us the peak value for each platform. Then we convert that column to a binary by comparing each "peak" value against each's month's value. Finally, we filter to only the peak values and select the columns we need.
+
+```{r}
+peak_social_engagement <- social_engagement |> 
+  group_by(platform) |> 
+  mutate(peak_engagement = max(value, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(peak_engagement = if_else(value == peak_engagement, TRUE, FALSE)) |> 
+  filter(peak_engagement == TRUE) |> 
+  select(platform, date, value)
+
+peak_social_engagement
+```
+
+```{r}
+#| echo: false
+instagram <- peak_social_engagement |> filter(platform == "Instagram")
+facebook <- peak_social_engagement |> filter(platform == "Facebook")
+twitter <- peak_social_engagement |> filter(platform == "Twitter")
+```
+
+And there we have it: Instagram peaked at `r instagram |> pull(value) |> prettyNum(big.mark = ",")` engagements in `r instagram |> pull(date) |> format("%B")` `r instagram |> pull(date) |> format("%Y")`, Twitter peaked at `r twitter |> pull(value) |> prettyNum(big.mark = ",")` engagements in `r twitter |> pull(date) |> format("%B")` `r twitter |> pull(date) |> format("%Y")`, and Facebook peaked at `r facebook |> pull(value) |> prettyNum(big.mark = ",")` engagements in `r facebook |> pull(date) |> format("%B")` `r facebook |> pull(date) |> format("%Y")`.
+
+Although we've found the "peak" months for Facebook, Twitter, and Instagram, let's also do the same for YouTube, blogs, and Sound Cloud. 
+
+Let's pull out the unique metric names per platform per Financial Year to get a sense of what we need to search for:
+
+```{r}
+tidy_data |> 
+  filter(platform %in% c("Sound Cloud", "Blogs", "YouTube")) |> 
+  distinct(year, platform, metric_name) |> 
+  datatable()
+```
+
+Scrolling through this table, we can see that for blogs we need to search for "page views", for YouTube it's "views", ans for Sound Cloud it's "podcast listens"... except in FY23, when it's "podcast plays". Armed with this knowledge, let's find what we need by passing a unique pattern for str_detect where were separate each value with a vertical line (read it as "or")...
+
+```{r}
+other_engagement <- tidy_data |> 
+  filter(
+    platform %in% c("Blogs", "YouTube", "Sound Cloud"),
+    str_detect(metric_name, "page views|views|podcast listens|podcast plays")
+    ) |> 
+  filter(!is.na(value))
+
+other_engagement |> 
+  datatable()
+```
+
+This looks like the data we need! Let's once again grab the "peak" months for each...
+
+```{r}
+other_peak_social_engagement <- other_engagement |> 
+  group_by(platform) |> 
+  mutate(peak_engagement = max(value, na.rm = TRUE)) |> 
+  ungroup() |> 
+  mutate(peak_engagement = if_else(value == peak_engagement, TRUE, FALSE)) |> 
+  filter(peak_engagement == TRUE) |> 
+  select(platform, date, value)
+
+other_peak_social_engagement
+```
+
+```{r}
+#| echo: false
+soundcloud <- other_peak_social_engagement |> filter(platform == "Sound Cloud")
+blogs <- other_peak_social_engagement |> filter(platform == "Blogs")
+youtube <- other_peak_social_engagement |> filter(platform == "YouTube")
+```
+
+And there we have it: Sound Cloud peaked at `r soundcloud |> pull(value) |> prettyNum(big.mark = ",")` engagements in `r soundcloud |> pull(date) |> format("%B")` `r soundcloud |> pull(date) |> format("%Y")`, the blogs peaked at `r blogs |> pull(value) |> prettyNum(big.mark = ",")` engagements in `r blogs |> pull(date) |> format("%B")` `r blogs |> pull(date) |> format("%Y")`, and YouTube peaked at `r youtube |> pull(value) |> prettyNum(big.mark = ",")` engagements in `r youtube |> pull(date) |> format("%B")` `r youtube |> pull(date) |> format("%Y")`.
+
+And we're done here... or are we? Maybe we're repeating ourselves with this analysis, and we can abstract this into a function to call with purrr again... but I'll leave that one to you to figure out :-)
